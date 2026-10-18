@@ -290,7 +290,9 @@ sealed class MainForm : Form
     static async Task Run(string file, string args) { using var p = Process.Start(new ProcessStartInfo(file, args) { UseShellExecute = false, CreateNoWindow = true }) ?? throw new Exception("Unable to start printer tool."); await p.WaitForExitAsync(); if (p.ExitCode != 0) throw new Exception("Printer tool returned an error."); }
     void PrintImage(string file, PrintJob job)
     {
-        using var image = Image.FromFile(file); using var doc = new PrintDocument(); doc.PrinterSettings.PrinterName = printerBox.Text; doc.PrinterSettings.Copies = (short)job.copies; doc.DefaultPageSettings.Landscape = job.orientation == "landscape";
+        using var image = Image.FromFile(file);
+        ApplyExifOrientation(image);
+        using var doc = new PrintDocument(); doc.PrinterSettings.PrinterName = printerBox.Text; doc.PrinterSettings.Copies = (short)job.copies; doc.DefaultPageSettings.Landscape = job.orientation == "landscape";
         // Use A4 and a small safety margin instead of the driver's usual 1-inch margins.
         // This keeps the complete image on the sheet while making it as large as possible.
         var a4 = doc.PrinterSettings.PaperSizes.Cast<PaperSize>().FirstOrDefault(p => p.Kind == PaperKind.A4 || p.PaperName.Equals("A4", StringComparison.OrdinalIgnoreCase));
@@ -298,6 +300,31 @@ sealed class MainForm : Form
         doc.DefaultPageSettings.Margins = new Margins(15, 15, 15, 15);
         doc.PrintPage += (_, e) => { if (e.Graphics == null) return; var bounds = e.MarginBounds; float scale = Math.Min((float)bounds.Width / image.Width, (float)bounds.Height / image.Height); int w = (int)(image.Width * scale), h = (int)(image.Height * scale); e.Graphics.DrawImage(image, bounds.Left + (bounds.Width - w) / 2, bounds.Top + (bounds.Height - h) / 2, w, h); };
         doc.Print();
+    }
+    static void ApplyExifOrientation(Image image)
+    {
+        const int orientationProperty = 0x0112;
+        if (!image.PropertyIdList.Contains(orientationProperty)) return;
+        try
+        {
+            var property = image.GetPropertyItem(orientationProperty);
+            if (property is null) return;
+            if (property.Value is not { Length: >= 2 } bytes) return;
+            var value = BitConverter.ToUInt16(bytes, 0);
+            var transform = value switch
+            {
+                2 => RotateFlipType.RotateNoneFlipX,
+                3 => RotateFlipType.Rotate180FlipNone,
+                4 => RotateFlipType.Rotate180FlipX,
+                5 => RotateFlipType.Rotate90FlipX,
+                6 => RotateFlipType.Rotate90FlipNone,
+                7 => RotateFlipType.Rotate270FlipX,
+                8 => RotateFlipType.Rotate270FlipNone,
+                _ => RotateFlipType.RotateNoneFlipNone
+            };
+            if (transform != RotateFlipType.RotateNoneFlipNone) image.RotateFlip(transform);
+        }
+        catch (ArgumentException) { /* Ignore malformed or unsupported EXIF metadata. */ }
     }
     void PrintText(string file, PrintJob job)
     {
