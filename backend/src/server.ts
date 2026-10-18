@@ -4,7 +4,7 @@ import multer from 'multer';
 import rateLimit from 'express-rate-limit';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, randomInt, createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, createReadStream, unlinkSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, createReadStream, unlinkSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileTypeFromFile } from 'file-type';
 import { z } from 'zod';
@@ -66,5 +66,13 @@ app.post('/api/agent/jobs/:id/claim',agent,(req,res)=>{const q=db.prepare("UPDAT
 const statusSchema=z.object({status:z.enum(['submitted','completed','failed','cancelled']),error:z.string().max(300).optional()});
 app.post('/api/agent/jobs/:id/status',agent,(req,res)=>{const v=statusSchema.safeParse(req.body);if(!v.success)return res.status(400).json({error:'Invalid job status.'});const q=db.prepare("UPDATE jobs SET status=?,updated=?,error=? WHERE id=? AND status='printing'").run(v.data.status,Date.now(),v.data.error||null,req.params.id);if(!q.changes)return res.status(404).json({error:'Job not found or no longer active.'});res.json({ok:true});});
 setInterval(()=>{const cut=Date.now()-retentionMs;const old=db.prepare('SELECT id,stored_name FROM jobs WHERE created<?').all(cut) as any[];for(const j of old){const p=path.join(uploadDir,j.stored_name);if(requireExists(p))try{unlinkSync(p)}catch{} db.prepare('DELETE FROM jobs WHERE id=?').run(j.id);}for(const f of readdirSync(uploadDir)){const p=path.join(uploadDir,f);try{if(statSync(p).mtimeMs<Date.now()-3600_000)unlinkSync(p)}catch{}}db.prepare('DELETE FROM pair_codes WHERE expires<?').run(Date.now());db.prepare("DELETE FROM pair_requests WHERE created<? AND state IN ('pending','rejected','done')").run(Date.now()-10*60_000);},60*60_000).unref();
+const frontendDist=path.resolve(base,'frontend/dist');
+if(existsSync(frontendDist)){
+  app.use(express.static(frontendDist,{index:false}));
+  app.get('*',(req,res,next)=>{
+    if(req.path.startsWith('/api/'))return next();
+    res.sendFile(path.join(frontendDist,'index.html'),error=>{if(error)next(error);});
+  });
+}
 app.use((err:any,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{if(err instanceof multer.MulterError&&err.code==='LIMIT_FILE_SIZE')return res.status(413).json({error:`This file is too large. The limit is ${Math.round(maxBytes/1024/1024)} MB.`});console.error('request failed',err?.message||'unknown');res.status(400).json({error:err?.message?.startsWith('Unsupported')?err.message:'The request could not be completed.'});});
 app.listen(port,'0.0.0.0',()=>console.log(`PrintBridge API listening on port ${port}`));

@@ -83,6 +83,10 @@ The frontend build is in `frontend/dist`; the API build is in `backend/dist`. Fo
 
 For hosted use, deploy the backend on a private service and expose it only through a TLS terminating reverse proxy. The Agent should use the HTTPS backend URL. Use network access controls and a managed secret store for the agent credential. Back up SQLite securely; uploaded documents are removed after the configured retention window. Do not expose port 3001 or the Agent key to arbitrary clients. A public hosted deployment needs operational hardening, monitoring, backups, and an installer/signing process before broad use.
 
+### Free Render demo deployment
+
+The root `render.yaml` creates one free Render web service that builds the frontend and API, then serves both from the same HTTPS origin. Render generates `AGENT_KEY` as a secret. Use the service's `onrender.com` URL on the phone and in the Windows Agent. Free Render services can sleep when idle and lose local SQLite data and uploads on restarts or sleep; pair the phone again after a reset. Use persistent storage and backups for dependable use.
+
 ## Windows Agent packaging
 
 Build a self contained x64 executable on Windows:

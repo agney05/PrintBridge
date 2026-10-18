@@ -6,3 +6,8 @@ backend/data/
 backend/uploads/
 agent/**/bin/
 agent/**/obj/
+agent/**/publish/
+
+data/
+uploads/
+

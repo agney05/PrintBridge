@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: printbridge-agney05
+    runtime: node
+    plan: free
+    buildCommand: corepack enable && corepack prepare pnpm@11.25.0 --activate && pnpm install --frozen-lockfile && pnpm --filter @printbridge/web build && pnpm --filter @printbridge/backend build
+    startCommand: node backend/dist/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.13.0
+      - key: AGENT_KEY
+        generateValue: true
