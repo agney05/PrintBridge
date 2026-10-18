@@ -291,6 +291,11 @@ sealed class MainForm : Form
     void PrintImage(string file, PrintJob job)
     {
         using var image = Image.FromFile(file); using var doc = new PrintDocument(); doc.PrinterSettings.PrinterName = printerBox.Text; doc.PrinterSettings.Copies = (short)job.copies; doc.DefaultPageSettings.Landscape = job.orientation == "landscape";
+        // Use A4 and a small safety margin instead of the driver's usual 1-inch margins.
+        // This keeps the complete image on the sheet while making it as large as possible.
+        var a4 = doc.PrinterSettings.PaperSizes.Cast<PaperSize>().FirstOrDefault(p => p.Kind == PaperKind.A4 || p.PaperName.Equals("A4", StringComparison.OrdinalIgnoreCase));
+        if (a4 != null) doc.DefaultPageSettings.PaperSize = a4;
+        doc.DefaultPageSettings.Margins = new Margins(15, 15, 15, 15);
         doc.PrintPage += (_, e) => { if (e.Graphics == null) return; var bounds = e.MarginBounds; float scale = Math.Min((float)bounds.Width / image.Width, (float)bounds.Height / image.Height); int w = (int)(image.Width * scale), h = (int)(image.Height * scale); e.Graphics.DrawImage(image, bounds.Left + (bounds.Width - w) / 2, bounds.Top + (bounds.Height - h) / 2, w, h); };
         doc.Print();
     }
