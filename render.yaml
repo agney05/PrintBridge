@@ -9,5 +9,3 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22.13.0
-      - key: AGENT_KEY
-        generateValue: true

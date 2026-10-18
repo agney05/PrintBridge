@@ -10,7 +10,7 @@ PrintBridge is a local network print bridge. A phone browser sends a document to
 - Real Windows printing: images and text use `PrintDocument`; PDFs use SumatraPDF; DOCX files use LibreOffice conversion followed by SumatraPDF. The latter tools are optional and must be installed on the Windows computer.
 - Automated backend validation tests (`npm test`).
 
-This is a functional MVP, not a signed consumer installer or hosted production service. It has not been exercised against your specific Windows printer or mobile devices in this environment. Windows printing, driver behavior, and optional renderer installations must be verified on the target computer.
+This is a functional MVP, not a signed consumer installer or hardened production service. It has not been exercised against your specific Windows printer or mobile devices in this environment. Windows printing, driver behavior, and optional renderer installations must be verified on the target computer.
 
 ## Architecture
 
@@ -29,7 +29,7 @@ Phone browser ── HTTP on trusted Wi-Fi ──> Vite / hosted web frontend
                                          Printer
 ```
 
-The backend creates a short lived code. The user enters it on the phone, then approves the phone locally in the Windows Agent. A random 256 bit phone token is issued after approval. The Agent authenticates separately with `AGENT_KEY`. Jobs are never made public. For local development the phone and computer must share a trusted Wi-Fi network. The code and job endpoints are not intended to be exposed directly to the public Internet.
+The backend creates a short lived code. The user enters it on the phone, then approves the phone locally in the Windows Agent. A random 256 bit phone token is issued after approval. Each Agent generates a private identity on its computer; the server stores only its token hash and scopes pairing requests, printer status, and jobs to that Agent. Jobs are never made public. For local development the phone and computer must share a trusted Wi-Fi network.
 
 The job state `submitted` means the Windows printing command/API accepted the job. It does **not** prove that paper physically came out. The OS/driver does not provide a consistent confirmation across printer models. PrintBridge therefore does not claim physical completion. On service restart, in-flight jobs become failed with a check-before-retry message to avoid duplicate copies.
 
@@ -51,7 +51,7 @@ The job state `submitted` means the Windows printing command/API accepted the jo
    Copy-Item .env.example .env
    ```
 
-3. Edit `.env`. Set `AGENT_KEY` to a private random string of at least 32 characters. Keep it secret. Set `WEB_ORIGIN` to the exact browser origin used below (for example `http://192.168.1.20:5173`). The API reads `.env` from the project root when started through the workspace scripts.
+3. Edit `.env` and set `WEB_ORIGIN` to the exact browser origin used below (for example `http://192.168.1.20:5173`). The API reads `.env` from the project root when started through the workspace scripts.
 4. Start both services:
 
    ```powershell
@@ -66,7 +66,7 @@ The job state `submitted` means the Windows printing command/API accepted the jo
    dotnet run --project .\agent\PrintBridge.Agent\PrintBridge.Agent.csproj
    ```
 
-   The Agent address is `http://localhost:3001` on the same computer. Paste the same `AGENT_KEY` from `.env` into the Agent. Choose the Windows printer and click **Start agent**.
+   Set the Agent address to `http://localhost:3001` for this local setup. The Agent creates and registers a private identity automatically. Choose the Windows printer and click **Start Agent**.
 7. Enter the Agent's six digit code on the phone. In the Agent, select the phone and click **Approve selected phone**. Select a PDF or image on the phone, set copies/orientation, and submit. Confirm the print on Windows.
 
 ### Phone connection note
@@ -79,13 +79,13 @@ The Vite development server must be reachable from the phone. If the Windows fir
 npm run build
 ```
 
-The frontend build is in `frontend/dist`; the API build is in `backend/dist`. For local use, the Vite dev server provides the `/api` proxy. A production deployment must serve the frontend and API behind one HTTPS reverse proxy, route `/api` to the backend, and configure `WEB_ORIGIN` to the exact HTTPS origin. Set `DATA_DIR` and `UPLOAD_DIR` to private directories outside the web root. Use a long random `AGENT_KEY`; do not commit `.env`.
+The frontend build is in `frontend/dist`; the API build is in `backend/dist`. For local use, the Vite dev server provides the `/api` proxy. A production deployment must serve the frontend and API behind one HTTPS reverse proxy, route `/api` to the backend, and configure `WEB_ORIGIN` to the exact HTTPS origin. Set `DATA_DIR` and `UPLOAD_DIR` to private directories outside the web root. Do not commit `.env`.
 
-For hosted use, deploy the backend on a private service and expose it only through a TLS terminating reverse proxy. The Agent should use the HTTPS backend URL. Use network access controls and a managed secret store for the agent credential. Back up SQLite securely; uploaded documents are removed after the configured retention window. Do not expose port 3001 or the Agent key to arbitrary clients. A public hosted deployment needs operational hardening, monitoring, backups, and an installer/signing process before broad use.
+For hosted use, deploy the backend behind HTTPS. The Agent should use the HTTPS backend URL. Each Agent creates a random identity and token automatically; Windows protects the saved token with DPAPI, and the backend stores only its hash and scopes pairing requests, printer status, and print jobs to that computer. No shared Agent key is needed. Phone pairing still requires the temporary six digit code and approval in the Windows app. Back up SQLite securely; uploaded documents are removed after the configured retention window. A public hosted deployment needs operational hardening, monitoring, backups, and an installer/signing process before broad use.
 
 ### Free Render demo deployment
 
-The root `render.yaml` creates one free Render web service that builds the frontend and API, then serves both from the same HTTPS origin. Render generates `AGENT_KEY` as a secret. Use the service's `onrender.com` URL on the phone and in the Windows Agent. Free Render services can sleep when idle and lose local SQLite data and uploads on restarts or sleep; pair the phone again after a reset. Use persistent storage and backups for dependable use.
+The root `render.yaml` creates one free Render web service that builds the frontend and API, then serves both from the same HTTPS origin. Use the service's `onrender.com` URL on the phone and in the Windows Agent. Each computer creates its own private Agent identity automatically; there is no shared Agent key to copy. Free Render services can sleep when idle and lose local SQLite data and uploads on restarts or sleep; pair the phone again after a reset. Use persistent storage and backups for dependable use.
 
 ## Windows Agent packaging
 
@@ -95,7 +95,7 @@ Build a self contained x64 executable on Windows:
 dotnet publish .\agent\PrintBridge.Agent\PrintBridge.Agent.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-The output is under `agent\PrintBridge.Agent\bin\Release\net8.0-windows\win-x64\publish`. This repo does not yet include a signed MSI/installer. The Agent stores its server, printer, and shared key in the current user's `%LOCALAPPDATA%\PrintBridge\agent.json`; protect that Windows account. The optional **Start this window when I sign in** control adds or removes a per-user Windows Run entry. The temporary document folder is `%LOCALAPPDATA%\PrintBridge\jobs` and is cleaned as jobs finish. Add an installer and code signing before distributing the application widely.
+The output is under `agent\PrintBridge.Agent\bin\Release\net8.0-windows\win-x64\publish`. This repo does not yet include a signed MSI/installer. The Agent stores its server, printer, and DPAPI-protected installation token in the current user's `%LOCALAPPDATA%\PrintBridge\agent.json`; protect that Windows account. The optional **Start this window when I sign in** control adds or removes a per-user Windows Run entry. The temporary document folder is `%LOCALAPPDATA%\PrintBridge\jobs` and is cleaned as jobs finish. Add an installer and code signing before distributing the application widely.
 
 ## Configuration
 
@@ -103,7 +103,6 @@ The output is under `agent\PrintBridge.Agent\bin\Release\net8.0-windows\win-x64\
 |---|---|---|
 | `PORT` | `3001` | API listener port |
 | `WEB_ORIGIN` | `http://localhost:5173` | Allowed web origin(s), comma separated |
-| `AGENT_KEY` | required | Secret shared by this backend and Windows Agent (32+ characters) |
 | `DATA_DIR` | `./data` | SQLite database directory |
 | `UPLOAD_DIR` | `./uploads` | Private temporary document storage |
 | `MAX_FILE_MB` | `25` | Maximum accepted upload size |
@@ -139,7 +138,7 @@ PDF, JPG/JPEG, PNG, TXT, and DOCX are accepted, up to the configured file limit.
 
 Current settings exposed to the phone are copies (1–5) and orientation. The printer, paper size, color, duplex, page range, and scaling settings are not surfaced yet; this MVP uses driver defaults except orientation and copies. Uploads are single-file, and the browser does not show transfer progress or offer mid-upload cancellation yet. The agent queue supports local approval, but pause/resume, clearing history, printer capability discovery, and a system tray UI are not included. Format and driver behavior differs across printers. The PDF preview uses the phone browser's built-in PDF viewer and is not a guarantee of printed fidelity. Camera capture is provided through the mobile file chooser where the browser supports it.
 
-Automatic printing is off by default and can be enabled in the Windows Agent after a warning. Anyone with an approved paired phone can then initiate printing without local review; approve only people you trust and revoke phones you no longer recognize. This codebase uses a single configured agent key for the local installation; rotate it if the Windows profile or backend configuration is compromised.
+Automatic printing is off by default and can be enabled in the Windows Agent after a warning. Anyone with an approved paired phone can then initiate printing without local review; approve only people you trust and revoke phones you no longer recognize. Each Windows installation has a separate random Agent token, and server data is scoped to that Agent. Keep the Windows profile private; delete its `agent.json` to forget that installation's identity.
 
 ## Tests and manual check
 
@@ -155,7 +154,7 @@ The tests cover pairing code deadline behavior, queued-only cancellation, and su
 
 - **Phone cannot open the site:** use the computer's current Wi-Fi IP, check both devices are on the same private network, and allow the Vite port on Windows Private firewall only.
 - **Pairing code rejected:** codes expire in five minutes and allow five attempts. Start the Agent again to show a fresh code.
-- **Agent cannot connect:** check backend address (`http://localhost:3001` on this PC), `AGENT_KEY`, and API health at `http://localhost:3001/api/health`.
+- **Agent cannot connect:** check the backend address and API health at `http://localhost:3001/api/health` for local use or the hosted `/api/health` URL for Render.
 - **Printer absent:** install the printer and confirm a Windows test page works, then restart the Agent.
 - **PDF/DOCX fails:** install SumatraPDF; for DOCX also install LibreOffice. Check the printer can print from a local Windows application.
 - **Job says submitted but paper did not print:** check the Windows queue, printer status, paper and driver. The application cannot reliably detect physical output on all models.
@@ -166,10 +165,10 @@ The tests cover pairing code deadline behavior, queued-only cancellation, and su
 
 - Keep the development server on a trusted private LAN; never port-forward its HTTP ports.
 - Use HTTPS with a maintained reverse proxy for hosted deployment.
-- Keep `.env`, the agent key, database, uploads, and agent settings private.
+- Keep `.env`, database, uploads, and local Agent settings private.
 - Approve pairing requests only when the Windows user recognizes the phone.
 - Leave automatic printing off unless all paired users are trusted.
-- Revoke lost phones and rotate `AGENT_KEY` after suspected exposure.
+- Revoke lost phones. Delete the affected computer's Agent settings if its Windows profile is compromised.
 - Keep Node, .NET, Windows, SumatraPDF, LibreOffice, printer drivers, and the reverse proxy patched.
 - Set restrictive file retention and backups; do not log document contents.
 - Protect the Windows login because the agent credential is stored in the user's profile.
