@@ -95,7 +95,7 @@ Build a self contained x64 executable on Windows:
 dotnet publish .\agent\PrintBridge.Agent\PrintBridge.Agent.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
 
-The output is under `agent\PrintBridge.Agent\bin\Release\net8.0-windows\win-x64\publish`. This repo does not yet include a signed MSI/installer. The Agent stores its server, printer, and DPAPI-protected installation token in the current user's `%LOCALAPPDATA%\PrintBridge\agent.json`; protect that Windows account. The optional **Start this window when I sign in** control adds or removes a per-user Windows Run entry. The temporary document folder is `%LOCALAPPDATA%\PrintBridge\jobs` and is cleaned as jobs finish. Add an installer and code signing before distributing the application widely.
+The output is under `agent\PrintBridge.Agent\bin\Release\net8.0-windows\win-x64\publish`. This repo does not yet include a signed MSI/installer. The Agent stores its server, printer, and DPAPI-protected installation token in the current user's `%LOCALAPPDATA%\PrintBridge\agent.json`; protect that Windows account. The optional **Start this window when I sign in** control adds or removes a per-user Windows Run entry. Temporary print files in `%LOCALAPPDATA%\PrintBridge\jobs` are cleaned as jobs finish. After a phone job is approved, the Agent also saves a copy using the phone's filename in the user's `Documents\PrintBridge Received` folder; duplicate names get a numbered suffix. Add an installer and code signing before distributing the application widely.
 
 ## Configuration
 

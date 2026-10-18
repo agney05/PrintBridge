@@ -76,6 +76,7 @@ sealed class MainForm : Form
     string agentId = Guid.NewGuid().ToString("D");
     string agentToken = NewAgentToken();
     string WorkDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PrintBridge", "jobs");
+    string ReceivedDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "PrintBridge Received");
     string SettingsFile => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PrintBridge", "agent.json");
 
     public MainForm()
@@ -255,12 +256,28 @@ sealed class MainForm : Form
             using var claim = await Send(HttpMethod.Post, $"/api/agent/jobs/{job.id}/claim"); if (!claim.RootElement.GetProperty("claimed").GetBoolean()) { File.Delete(local); return; }
             jobList.Items.Insert(0, $"{DateTime.Now:t} · {job.filename} · approved for printing");
             if (!autoPrint.Checked && MessageBox.Show($"Print this document?\n\n{job.filename}\nPrinter: {printerBox.Text}\nCopies: {job.copies}", "Confirm printing", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) { await SetJob(job.id, "cancelled", "Declined on the Windows computer."); return; }
+            string? savedCopy = null;
+            try { savedCopy = SaveReceivedCopy(local, job.filename); }
+            catch (Exception ex) { Debug.WriteLine($"Could not save received copy: {ex}"); }
+            if (savedCopy != null) jobList.Items[0] = $"{DateTime.Now:t} · saved {Path.GetFileName(savedCopy)} · printing";
             await Print(local, job);
             await SetJob(job.id, "submitted", "Windows accepted the job for printing. Physical completion cannot be confirmed.");
-            jobList.Items[0] = $"{DateTime.Now:t} · {job.filename} · submitted to printer";
+            jobList.Items[0] = savedCopy == null ? $"{DateTime.Now:t} · {job.filename} · submitted to printer" : $"{DateTime.Now:t} · {Path.GetFileName(savedCopy)} · submitted to printer";
         }
         catch (Exception ex) { await SetJob(job.id, "failed", "The document could not be sent to the printer. Check the printer and required PDF/Office tools."); jobList.Items.Insert(0, $"{DateTime.Now:t} · {job.filename} · failed"); Debug.WriteLine(ex); }
         finally { try { if (File.Exists(local)) File.Delete(local); } catch { } busy = false; }
+    }
+    string SaveReceivedCopy(string source, string originalName)
+    {
+        string name = Path.GetFileName(originalName);
+        foreach (char invalid in Path.GetInvalidFileNameChars()) name = name.Replace(invalid, '_');
+        if (string.IsNullOrWhiteSpace(name) || name is "." or "..") name = "PrintBridge document" + Path.GetExtension(originalName);
+        Directory.CreateDirectory(ReceivedDir);
+        string destination = Path.Combine(ReceivedDir, name);
+        for (int suffix = 2; File.Exists(destination); suffix++)
+            destination = Path.Combine(ReceivedDir, $"{Path.GetFileNameWithoutExtension(name)} ({suffix}){Path.GetExtension(name)}");
+        File.Copy(source, destination);
+        return destination;
     }
     async Task SetJob(string id, string status, string error) { try { using var _ = await Send(HttpMethod.Post, $"/api/agent/jobs/{id}/status", new { status, error }); } catch { } }
     async Task Print(string input, PrintJob job)
@@ -292,6 +309,10 @@ sealed class MainForm : Form
     {
         using var image = Image.FromFile(file);
         ApplyExifOrientation(image);
+        // Some mobile browsers remove EXIF tags while keeping the camera's raw landscape pixels.
+        // When that conflicts with the requested page orientation, rotate to match the selection.
+        bool landscape = job.orientation == "landscape";
+        if ((image.Width > image.Height) != landscape) image.RotateFlip(RotateFlipType.Rotate90FlipNone);
         using var doc = new PrintDocument(); doc.PrinterSettings.PrinterName = printerBox.Text; doc.PrinterSettings.Copies = (short)job.copies; doc.DefaultPageSettings.Landscape = job.orientation == "landscape";
         // Use A4 and a small safety margin instead of the driver's usual 1-inch margins.
         // This keeps the complete image on the sheet while making it as large as possible.
