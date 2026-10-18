@@ -14,7 +14,8 @@ internal static class Program
     static void Main() { ApplicationConfiguration.Initialize(); Application.Run(new MainForm()); }
 }
 
-record PairRequest(string id, string deviceName);
+record PairRequest(string id, string deviceName, long created);
+record AgentDevice(string id, string name, long created);
 record PrintJob(string id, string filename, string mime, int size, int copies, string orientation, string status, long created);
 
 static class AgentSecret
@@ -60,11 +61,13 @@ sealed class MainForm : Form
     readonly Label codeExpiryLabel = new() { Text = "Start the Agent to create a temporary pairing code.", AutoSize = true, ForeColor = Color.FromArgb(98, 113, 110) };
     readonly Label stateLabel = new() { Text = "Offline", AutoSize = true, ForeColor = Color.FromArgb(194, 203, 200), Font = new Font("Segoe UI", 10, FontStyle.Bold) };
     readonly Label topStatusLabel = new() { Text = "OFFLINE", AutoSize = true, ForeColor = Color.FromArgb(98, 113, 110), Font = new Font("Segoe UI", 10, FontStyle.Bold) };
-    readonly ListBox requestList = new() { Dock = DockStyle.Fill, IntegralHeight = false, BorderStyle = BorderStyle.None, BackColor = Color.White, Font = new Font("Segoe UI", 11) };
+    readonly ListView requestList = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false, BorderStyle = BorderStyle.None, BackColor = Color.White, Font = new Font("Segoe UI", 10), HeaderStyle = ColumnHeaderStyle.Nonclickable };
+    readonly ListView deviceList = new() { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false, BorderStyle = BorderStyle.None, BackColor = Color.White, Font = new Font("Segoe UI", 10), HeaderStyle = ColumnHeaderStyle.Nonclickable };
     readonly ListBox jobList = new() { Dock = DockStyle.Fill, IntegralHeight = false, BorderStyle = BorderStyle.None, BackColor = Color.White, Font = new Font("Segoe UI", 10) };
     readonly Button startButton = new() { Text = "Start Agent", Width = 280, Height = 46, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(39, 132, 110), ForeColor = Color.White, Font = new Font("Segoe UI", 11, FontStyle.Bold), Cursor = Cursors.Hand };
     readonly Button approveButton = new() { Text = "Approve phone", Width = 150, Height = 40, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(39, 132, 110), ForeColor = Color.White, Font = new Font("Segoe UI", 10, FontStyle.Bold), Cursor = Cursors.Hand };
     readonly Button rejectButton = new() { Text = "Decline", Width = 100, Height = 40, FlatStyle = FlatStyle.Flat, BackColor = Color.White, ForeColor = Color.FromArgb(64, 79, 75), Font = new Font("Segoe UI", 10), Cursor = Cursors.Hand };
+    readonly Button revokeButton = new() { Text = "Disconnect selected", Width = 170, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = Color.White, ForeColor = Color.FromArgb(161, 65, 61), Font = new Font("Segoe UI", 9, FontStyle.Bold), Cursor = Cursors.Hand };
     readonly Button refreshCodeButton = new() { Text = "New code", Width = 112, Height = 38, FlatStyle = FlatStyle.Flat, BackColor = Color.White, ForeColor = Color.FromArgb(39, 103, 89), Font = new Font("Segoe UI", 10, FontStyle.Bold), Cursor = Cursors.Hand };
     readonly System.Windows.Forms.Timer timer = new() { Interval = 3000 };
     readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(20) };
@@ -77,15 +80,17 @@ sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "PrintBridge Agent"; Width = 1240; Height = 850; MinimumSize = new Size(1000, 700); StartPosition = FormStartPosition.CenterScreen; WindowState = FormWindowState.Maximized;
+        Text = "PrintBridge Agent"; Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? System.Drawing.SystemIcons.Application; Width = 1240; Height = 850; MinimumSize = new Size(1000, 700); StartPosition = FormStartPosition.CenterScreen; WindowState = FormWindowState.Maximized;
         BackColor = Color.FromArgb(244, 247, 246); Font = new Font("Segoe UI", 10); Padding = Padding.Empty; DoubleBuffered = true;
         BuildInterface();
         var printers = PrinterSettings.InstalledPrinters.Cast<string>().ToArray(); printerBox.Items.AddRange(printers);
         var def = new PrinterSettings().PrinterName; if (printerBox.Items.Contains(def)) printerBox.SelectedItem = def; else if (printers.Length > 0) printerBox.SelectedIndex = 0;
         autoPrint.CheckedChanged += (_, _) => { if (autoPrint.Checked && MessageBox.Show("Automatic printing lets any approved phone send jobs straight to this printer. Only enable it for people you trust.", "Enable automatic printing?", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) autoPrint.Checked = false; };
-        requestList.DisplayMember = "deviceName";
+        requestList.Columns.Add("PHONE", 180); requestList.Columns.Add("REQUESTED", 100);
+        deviceList.Columns.Add("CONNECTED PHONE", 190); deviceList.Columns.Add("ADDED", 90);
         startButton.Click += async (_, _) => { if (running) StopAgent(); else await StartAgent(); };
         approveButton.Click += async (_, _) => await PairAction("approve"); rejectButton.Click += async (_, _) => await PairAction("reject");
+        revokeButton.Click += async (_, _) => await RevokeDevice();
         refreshCodeButton.Click += async (_, _) => await GenerateCode();
         startWithWindows.CheckedChanged += (_, _) => SetStartup(startWithWindows.Checked);
         printerBox.SelectedIndexChanged += async (_, _) => { if (running) await Heartbeat(); };
@@ -147,7 +152,7 @@ sealed class MainForm : Form
         layout.Controls.Add(pageTitle, 0, 0);
         var cards = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, BackColor = Color.Transparent, Margin = new Padding(-10) };
         cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        cards.RowStyles.Add(new RowStyle(SizeType.Percent, 46)); cards.RowStyles.Add(new RowStyle(SizeType.Percent, 54));
+        cards.RowStyles.Add(new RowStyle(SizeType.Percent, 44)); cards.RowStyles.Add(new RowStyle(SizeType.Percent, 56));
         var codeBody = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = Color.White, Padding = new Padding(4, 4, 4, 0) };
         codeBody.RowStyles.Add(new RowStyle(SizeType.Percent, 58)); codeBody.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); codeBody.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
         codeBody.Controls.Add(codeLabel, 0, 0); codeBody.Controls.Add(codeExpiryLabel, 0, 1); refreshCodeButton.Anchor = AnchorStyles.Left; codeBody.Controls.Add(refreshCodeButton, 0, 2);
@@ -157,8 +162,13 @@ sealed class MainForm : Form
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = Color.White, Padding = new Padding(0, 5, 0, 0) };
         approveButton.Margin = new Padding(0, 0, 10, 0); rejectButton.Margin = Padding.Empty; actions.Controls.Add(approveButton); actions.Controls.Add(rejectButton); requestsBody.Controls.Add(actions, 0, 1);
         cards.Controls.Add(CreateCard("Phone requests", "Approve only phones you recognize.", requestsBody), 1, 0);
+        var devicesBody = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.White, Padding = new Padding(0, 4, 0, 0) };
+        devicesBody.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); devicesBody.RowStyles.Add(new RowStyle(SizeType.Absolute, 44)); devicesBody.Controls.Add(deviceList, 0, 0);
+        var deviceActions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = Color.White, Padding = new Padding(0, 3, 0, 0) };
+        revokeButton.Margin = Padding.Empty; deviceActions.Controls.Add(revokeButton); devicesBody.Controls.Add(deviceActions, 0, 1);
+        cards.Controls.Add(CreateCard("Connected phones", "Manage phones approved for this computer.", devicesBody), 0, 1);
         var jobsBody = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(0, 4, 0, 0) }; jobsBody.Controls.Add(jobList);
-        cards.Controls.Add(CreateCard("Recent print jobs", "Files are downloaded only when the Agent accepts a job.", jobsBody), 0, 1); cards.SetColumnSpan(cards.GetControlFromPosition(0, 1)!, 2);
+        cards.Controls.Add(CreateCard("Recent print jobs", "Files are downloaded only when the Agent accepts a job.", jobsBody), 1, 1);
         layout.Controls.Add(cards, 0, 1); return layout;
     }
 
@@ -193,18 +203,47 @@ sealed class MainForm : Form
         if (!running || busy) return;
         try
         {
+            var selectedRequestId = requestList.SelectedItems.Count > 0 ? requestList.SelectedItems[0].Tag is PairRequest selectedRequest ? selectedRequest.id : null : null;
             using var d = await Send(HttpMethod.Get, "/api/agent/pairing-requests"); requestList.Items.Clear();
-            foreach (var e in d.RootElement.EnumerateArray()) requestList.Items.Add(new PairRequest(e.GetProperty("id").GetString()!, e.GetProperty("deviceName").GetString()!));
+            foreach (var e in d.RootElement.EnumerateArray())
+            {
+                var p = new PairRequest(e.GetProperty("id").GetString()!, e.GetProperty("deviceName").GetString()!, e.GetProperty("created").GetInt64());
+                var item = new ListViewItem(p.deviceName) { Tag = p }; item.SubItems.Add(FormatTime(p.created)); requestList.Items.Add(item);
+                if (p.id == selectedRequestId) item.Selected = true;
+            }
+            if (requestList.Items.Count == 0) AddPlaceholder(requestList, "No phone is waiting for approval", "New requests appear here");
+            var selectedDeviceId = deviceList.SelectedItems.Count > 0 ? deviceList.SelectedItems[0].Tag is AgentDevice selectedDevice ? selectedDevice.id : null : null;
+            using var connected = await Send(HttpMethod.Get, "/api/devices"); deviceList.Items.Clear();
+            foreach (var e in connected.RootElement.EnumerateArray())
+            {
+                var phone = new AgentDevice(e.GetProperty("id").GetString()!, e.GetProperty("name").GetString()!, e.GetProperty("created").GetInt64());
+                var item = new ListViewItem(phone.name) { Tag = phone }; item.SubItems.Add(FormatDate(phone.created)); deviceList.Items.Add(item);
+                if (phone.id == selectedDeviceId) item.Selected = true;
+            }
+            if (deviceList.Items.Count == 0) AddPlaceholder(deviceList, "No phones connected yet", "Approve a request to connect one");
             using var jobs = await Send(HttpMethod.Get, "/api/agent/jobs"); var first = jobs.RootElement.EnumerateArray().FirstOrDefault();
             if (first.ValueKind != JsonValueKind.Undefined) { var job = JsonSerializer.Deserialize<PrintJob>(first.GetRawText(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }); if (job != null) await HandleJob(job); }
         }
         catch (Exception ex) { SetStatus("CONNECTION ISSUE · RETRYING", false); Debug.WriteLine(ex.Message); }
     }
+    static void AddPlaceholder(ListView list, string title, string detail)
+    {
+        var item = new ListViewItem(title) { ForeColor = Color.FromArgb(125, 139, 134) }; item.SubItems.Add(detail); list.Items.Add(item);
+    }
+    static string FormatTime(long timestamp) => DateTimeOffset.FromUnixTimeMilliseconds(timestamp).ToLocalTime().ToString("t");
+    static string FormatDate(long timestamp) => DateTimeOffset.FromUnixTimeMilliseconds(timestamp).ToLocalTime().ToString("d");
     async Task PairAction(string action)
     {
-        if (requestList.SelectedItem is not PairRequest p) { MessageBox.Show("Select a phone request first."); return; }
-        try { using var _ = await Send(HttpMethod.Post, $"/api/agent/pairing-requests/{p.id}/{action}"); requestList.Items.Remove(p); }
+        if (requestList.SelectedItems.Count == 0 || requestList.SelectedItems[0].Tag is not PairRequest p) { MessageBox.Show("Select a phone request first."); return; }
+        try { using var _ = await Send(HttpMethod.Post, $"/api/agent/pairing-requests/{p.id}/{action}"); await Poll(); }
         catch { MessageBox.Show("Could not update this pairing request. Try again."); }
+    }
+    async Task RevokeDevice()
+    {
+        if (deviceList.SelectedItems.Count == 0 || deviceList.SelectedItems[0].Tag is not AgentDevice phone) { MessageBox.Show("Select a connected phone first."); return; }
+        if (MessageBox.Show($"Disconnect {phone.name}? It will no longer be able to send print jobs until it is paired again.", "Disconnect phone", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        try { using var _ = await Send(HttpMethod.Delete, $"/api/devices/{phone.id}"); await Poll(); }
+        catch { MessageBox.Show("Could not disconnect this phone. Try again."); }
     }
     async Task HandleJob(PrintJob job)
     {
