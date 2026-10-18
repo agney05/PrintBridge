@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+backend/data/
+backend/uploads/
+agent/**/bin/
+agent/**/obj/
